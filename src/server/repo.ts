@@ -79,6 +79,10 @@ export interface Repo {
   putTimeline(id: string, t: TimelineDto): Promise<void>;
 
   playerMatches(puuid: string, season?: number): Promise<MatchSummaryRow[]>;
+  /** Just the stored match ids (cheap: what every sync needs). */
+  playerMatchIds(puuid: string): Promise<string[]>;
+  /** Non-remake summaries still missing the lobby placement (see tracker step 0). */
+  staleSummaries(puuid: string, limit: number): Promise<MatchSummaryRow[]>;
   putPlayerMatch(puuid: string, row: MatchSummaryRow): Promise<void>;
   setLpDelta(puuid: string, matchId: string, lp: number): Promise<void>;
 
@@ -167,6 +171,13 @@ function supabaseRepo(sb: SupabaseClient): Repo {
       if (season != null) q = q.eq('season', season);
       return (must(await q) as { summary: MatchSummaryRow; lp_delta: number | null }[]).map((r) => ({ ...r.summary, lpDelta: r.lp_delta }));
     },
+    async playerMatchIds(puuid) {
+      return (must(await sb.from('player_matches').select('match_id').eq('puuid', puuid).limit(5000)) as { match_id: string }[]).map((r) => r.match_id);
+    },
+    async staleSummaries(puuid, limit) {
+      const q = sb.from('player_matches').select('summary, lp_delta').eq('puuid', puuid).is('summary->place', null).neq('summary->>remake', 'true').limit(limit);
+      return (must(await q) as { summary: MatchSummaryRow; lp_delta: number | null }[]).map((r) => ({ ...r.summary, lpDelta: r.lp_delta }));
+    },
     async putPlayerMatch(puuid, row) {
       must(
         await sb.from('player_matches').upsert({ puuid, match_id: row.matchId, season: row.season, queue_id: row.queueId, ended_at: new Date(row.endedAt).toISOString(), summary: row }, { onConflict: 'puuid,match_id' }),
@@ -242,6 +253,12 @@ function localRepo(root: string): Repo {
     async playerMatches(puuid, season) {
       const rows = await read<MatchSummaryRow[]>(pm(puuid), []);
       return rows.filter((r) => season == null || r.season === season).sort((a, b) => b.endedAt - a.endedAt);
+    },
+    async playerMatchIds(puuid) {
+      return (await read<MatchSummaryRow[]>(pm(puuid), [])).map((r) => r.matchId);
+    },
+    async staleSummaries(puuid, limit) {
+      return (await read<MatchSummaryRow[]>(pm(puuid), [])).filter((r) => r.place === undefined && !r.remake).slice(0, limit);
     },
     async putPlayerMatch(puuid, row) {
       const rows = (await read<MatchSummaryRow[]>(pm(puuid), [])).filter((r) => r.matchId !== row.matchId);

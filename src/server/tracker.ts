@@ -76,11 +76,11 @@ async function doSync(puuid: string): Promise<SyncResult> {
   if (!player) throw new Error('Player is not tracked');
   const src = persistentSource();
   const result: SyncResult = { newMatches: [], backfill: { done: player.backfillDone, stored: 0 }, rank: null, limited: false };
-  const stored = await repo.playerMatches(puuid);
-  const known = new Set(stored.map((r) => r.matchId));
+  // Only ids here: reading every summary on each sync would cost megabytes of database egress.
+  const known = new Set(await repo.playerMatchIds(puuid));
 
   // 0) Upgrade old summaries (no lobby placement yet) from stored matches: database only, no Riot calls.
-  for (const old of stored.filter((r) => r.place === undefined && !r.remake).slice(0, UPGRADE_PER_SYNC)) {
+  for (const old of await repo.staleSummaries(puuid, UPGRADE_PER_SYNC)) {
     const m = await repo.getMatch(old.matchId);
     const row = m ? summarize(m, puuid) : null;
     if (row) await repo.putPlayerMatch(puuid, { ...row, lpDelta: old.lpDelta });
